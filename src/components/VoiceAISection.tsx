@@ -87,13 +87,46 @@ function speak(text: string, lang: LangCode, onEnd: () => void) {
     return;
   }
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(text);
-  utt.lang = lang;
-  utt.rate = 0.95;
-  utt.pitch = 1;
-  utt.onend = onEnd;
-  utt.onerror = onEnd;
-  window.speechSynthesis.speak(utt);
+
+  const doSpeak = () => {
+    const utt = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      const langPrefix = lang.split("-")[0]; // "kn", "hi", "en"
+      const best =
+        voices.find((v) => v.lang === lang) ??
+        voices.find((v) => v.lang.startsWith(langPrefix)) ??
+        voices.find((v) => v.lang.startsWith("en")) ??
+        voices[0];
+      if (best) {
+        utt.voice = best;
+        utt.lang  = best.lang;
+      } else {
+        utt.lang = lang;
+      }
+    } else {
+      utt.lang = lang;
+    }
+    utt.rate  = 0.92;
+    utt.pitch = 1;
+    utt.onend  = onEnd;
+    utt.onerror = () => onEnd();
+    window.speechSynthesis.speak(utt);
+  };
+
+  // Voices may not be loaded yet in some browsers — wait for them
+  if (window.speechSynthesis.getVoices().length > 0) {
+    doSpeak();
+  } else {
+    let fired = false;
+    const handler = () => {
+      if (fired) return;
+      fired = true;
+      doSpeak();
+    };
+    window.speechSynthesis.addEventListener("voiceschanged", handler, { once: true });
+    setTimeout(handler, 800); // safety fallback if event never fires
+  }
 }
 
 /* ─── Waveform bars ────────────────────────────────────────── */
@@ -154,13 +187,20 @@ const STATUS_CONFIG: Record<
 
 /* ─── Main Component ────────────────────────────────────────── */
 export default function VoiceAISection() {
-  const [phase, setPhase]         = useState<Phase>("idle");
+  const [phase, setPhase]           = useState<Phase>("idle");
   const [transcript, setTranscript] = useState("");
-  const [aiReply, setAiReply]     = useState("");
+  const [aiReply, setAiReply]       = useState("");
   const [detectedLang, setDetectedLang] = useState<LangCode | null>(null);
-  const [supported, setSupported] = useState(true);
+  const [selectedLang, setSelectedLang] = useState<LangCode>("en-IN");
+  const [supported, setSupported]   = useState(true);
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef  = useRef<SpeechRecognition | null>(null);
+  /** Set to true the moment a final speech result is received.
+   *  Prevents the onend handler from resetting the phase when processing
+   *  is already in flight (race-condition fix). */
+  const resultFiredRef  = useRef(false);
+  /** Timeout handle used to auto-stop recognition after 10 s of silence. */
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* Check browser support once */
   useEffect(() => {
@@ -176,17 +216,14 @@ export default function VoiceAISection() {
         const res = await fetch("/api/voice-ai", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            transcript: text,
-            detectedLang: lang,
-          }),
+          body: JSON.stringify({ transcript: text }),
         });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();
 
-        if (data.error) throw new Error(data.error);
+        if (!res.ok || !data.success) {
+          throw new Error(data.error ?? `HTTP ${res.status}`);
+        }
 
         const reply: string = data.reply ?? FALLBACK[lang];
         setAiReply(reply);
@@ -205,7 +242,7 @@ export default function VoiceAISection() {
 
   /* ── Start speech recognition ── */
   const startListening = useCallback(() => {
-    if (phase !== "idle") return;
+    if (phase !== "idle" && phase !== "error") return;
 
     const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!SR) {
@@ -216,11 +253,14 @@ export default function VoiceAISection() {
     // Stop any ongoing TTS
     window.speechSynthesis?.cancel();
 
+    resultFiredRef.current = false;
+
     const rec = new SR();
-    // Allow multi-language detection: browser will pick up script automatically
-    rec.lang = "en-IN";
-    rec.continuous = false;
-    rec.interimResults = false;
+    rec.lang           = selectedLang;
+    // continuous = true → keeps listening past pauses so the full question is captured
+    rec.continuous     = true;
+    // interimResults = true → shows live transcription while speaking
+    rec.interimResults = true;
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
@@ -228,29 +268,70 @@ export default function VoiceAISection() {
       setTranscript("");
       setAiReply("");
       setDetectedLang(null);
+
+      // Auto-stop after 10 s in case the user stops speaking without a final result
+      silenceTimerRef.current = setTimeout(() => {
+        if (!resultFiredRef.current) {
+          rec.stop();
+        }
+      }, 10000);
     };
 
     rec.onresult = (event: SpeechRecognitionEvent) => {
-      const result = event.results[0][0].transcript;
-      const lang   = detectLang(result);
-      setTranscript(result);
-      setDetectedLang(lang);
-      askGemini(result, lang);
+      let interimText = "";
+      let finalText   = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const segment = event.results[i];
+        if (segment.isFinal) {
+          finalText += segment[0].transcript;
+        } else {
+          interimText += segment[0].transcript;
+        }
+      }
+
+      // Show interim transcript live so the user can see it's listening
+      if (interimText) {
+        setTranscript(interimText);
+      }
+
+      if (finalText) {
+        // Clear silence timer — we got a complete utterance
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        resultFiredRef.current = true;
+
+        // Prefer explicitly selected language; script detection as secondary check
+        const scriptLang = detectLang(finalText);
+        const lang: LangCode = scriptLang !== "en-IN" ? scriptLang : selectedLang;
+        setTranscript(finalText);
+        setDetectedLang(lang);
+
+        // Stop recognition before sending to API
+        rec.stop();
+        askGemini(finalText, lang);
+      }
     };
 
     rec.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       console.error("[SpeechRecognition]", event.error);
-      if (event.error !== "no-speech") {
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         setPhase("error");
-        setAiReply("Microphone error. Please allow mic access and retry.");
+        setAiReply("Microphone access denied. Please allow mic access in your browser settings.");
+      } else if (event.error !== "no-speech" && event.error !== "aborted") {
+        setPhase("error");
+        setAiReply("Microphone error. Please retry.");
       } else {
         setPhase("idle");
       }
     };
 
     rec.onend = () => {
-      // If still in listening phase (no result), reset
-      setPhase((prev) => (prev === "listening" ? "idle" : prev));
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      // Only reset to idle if no final result was received (i.e. user didn't speak)
+      if (!resultFiredRef.current) {
+        setPhase((prev) => (prev === "listening" ? "idle" : prev));
+      }
     };
 
     recognitionRef.current = rec;
@@ -259,11 +340,12 @@ export default function VoiceAISection() {
     } catch {
       setPhase("idle");
     }
-  }, [phase, askGemini]);
+  }, [phase, askGemini, selectedLang]);
 
   /* Cleanup on unmount */
   useEffect(() => {
     return () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       recognitionRef.current?.abort();
       window.speechSynthesis?.cancel();
     };
@@ -272,9 +354,9 @@ export default function VoiceAISection() {
   const { label: statusLabel, color: statusColor } =
     STATUS_CONFIG[phase];
 
-  const isActive = phase === "listening" || phase === "speaking";
+  const isActive  = phase === "listening" || phase === "speaking";
   const isLoading = phase === "processing";
-  const canClick = phase === "idle" || phase === "error";
+  const canClick  = phase === "idle" || phase === "error";
 
   return (
     <section
@@ -317,6 +399,25 @@ export default function VoiceAISection() {
 
         {/* ── Main interactive area ── */}
         <div className="flex flex-col items-center justify-center gap-10">
+
+          {/* Language selector */}
+          <div className="flex gap-3">
+            {(["en-IN", "hi-IN", "kn-IN"] as LangCode[]).map((l) => (
+              <button
+                key={l}
+                onClick={() => {
+                  if (phase === "idle" || phase === "error") setSelectedLang(l);
+                }}
+                className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${
+                  selectedLang === l
+                    ? "bg-green-500 text-black shadow-[0_0_20px_rgba(34,197,94,0.5)]"
+                    : "border border-green-500/30 text-green-400 hover:bg-green-500/10"
+                }`}
+              >
+                {l === "en-IN" ? "🇬🇧 English" : l === "hi-IN" ? "🇮🇳 हिंदी" : "🌿 ಕನ್ನಡ"}
+              </button>
+            ))}
+          </div>
 
           {/* Orb button */}
           <div className="relative">

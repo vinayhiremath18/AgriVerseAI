@@ -30,17 +30,17 @@ interface ChartPoint {
   cotton: number;
 }
 
-// ── Static data ───────────────────────────────────────────────────────────────
-const INITIAL_PRICES: CropPrice[] = [
-  { crop: "Wheat",    unit: "quintal", base: 2125, price: 2125, change: 2.8,  trend: "up"   },
-  { crop: "Rice",     unit: "quintal", base: 2450, price: 2450, change: 5.2,  trend: "up"   },
-  { crop: "Cotton",   unit: "quintal", base: 6800, price: 6800, change: 8.1,  trend: "up"   },
-  { crop: "Tomato",   unit: "kg",      base: 48,   price: 48,   change: -3.4, trend: "down" },
-  { crop: "Soybean",  unit: "quintal", base: 4200, price: 4200, change: 3.5,  trend: "up"   },
-  { crop: "Sugarcane",unit: "tonne",   base: 3150, price: 3150, change: -1.4, trend: "down" },
+// ── Fallback static data (used while loading or if API fails) ─────────────────
+const FALLBACK_PRICES: CropPrice[] = [
+  { crop: "Wheat",     unit: "quintal", base: 2125, price: 2125, change: 2.8,  trend: "up"   },
+  { crop: "Rice",      unit: "quintal", base: 2450, price: 2450, change: 5.2,  trend: "up"   },
+  { crop: "Cotton",    unit: "quintal", base: 6800, price: 6800, change: 8.1,  trend: "up"   },
+  { crop: "Tomato",    unit: "kg",      base: 48,   price: 48,   change: -3.4, trend: "down" },
+  { crop: "Soybean",   unit: "quintal", base: 4200, price: 4200, change: 3.5,  trend: "up"   },
+  { crop: "Sugarcane", unit: "tonne",   base: 3150, price: 3150, change: -1.4, trend: "down" },
 ];
 
-const CHART_DATA: ChartPoint[] = [
+const FALLBACK_CHART: ChartPoint[] = [
   { day: "Mon", wheat: 2100, rice: 2380, cotton: 6550 },
   { day: "Tue", wheat: 2135, rice: 2410, cotton: 6620 },
   { day: "Wed", wheat: 2090, rice: 2445, cotton: 6700 },
@@ -50,17 +50,17 @@ const CHART_DATA: ChartPoint[] = [
   { day: "Sun", wheat: 2210, rice: 2520, cotton: 6950 },
 ];
 
-const AI_PREDICTIONS = [
-  { label: "HIGH DEMAND",       crop: "Rice",     color: "#00ff66", bg: "rgba(0,255,102,0.08)"  },
-  { label: "PRICE SPIKE ALERT", crop: "Cotton",   color: "#ffd700", bg: "rgba(255,215,0,0.08)"  },
-  { label: "LOW RISK CROP",     crop: "Wheat",    color: "#00e5ff", bg: "rgba(0,229,255,0.08)"  },
-  { label: "EXPORT OPPORTUNITY",crop: "Soybean",  color: "#a78bfa", bg: "rgba(167,139,250,0.08)"},
+const FALLBACK_PREDICTIONS = [
+  { label: "HIGH DEMAND",        crop: "Rice",    color: "#00ff66", bg: "rgba(0,255,102,0.08)"   },
+  { label: "PRICE SPIKE ALERT",  crop: "Cotton",  color: "#ffd700", bg: "rgba(255,215,0,0.08)"   },
+  { label: "LOW RISK CROP",      crop: "Wheat",   color: "#00e5ff", bg: "rgba(0,229,255,0.08)"   },
+  { label: "EXPORT OPPORTUNITY", crop: "Soybean", color: "#a78bfa", bg: "rgba(167,139,250,0.08)" },
 ];
 
-const RECOMMENDATIONS = [
-  { action: "BUY",  crop: "Rice",    reason: "Demand surge — monsoon boost",  color: "#00ff66", glow: "rgba(0,255,102,0.35)"  },
-  { action: "SELL", crop: "Tomato",  reason: "Peak harvest — prices softening",color: "#ffd700", glow: "rgba(255,215,0,0.35)"  },
-  { action: "HOLD", crop: "Wheat",   reason: "Stable — watch export data",    color: "#00e5ff", glow: "rgba(0,229,255,0.35)"  },
+const FALLBACK_RECS = [
+  { action: "BUY",  crop: "Rice",   reason: "Demand surge — monsoon boost",   color: "#00ff66", glow: "rgba(0,255,102,0.35)"  },
+  { action: "SELL", crop: "Tomato", reason: "Peak harvest — prices softening", color: "#ffd700", glow: "rgba(255,215,0,0.35)"  },
+  { action: "HOLD", crop: "Wheat",  reason: "Stable — watch export data",      color: "#00e5ff", glow: "rgba(0,229,255,0.35)"  },
 ];
 
 const TICKER_ITEMS = [
@@ -112,43 +112,64 @@ function CustomTooltip({ active, payload, label }: {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function MarketIntelligenceSection() {
-  const [prices, setPrices] = useState<CropPrice[]>(INITIAL_PRICES);
+  const [prices, setPrices]       = useState<CropPrice[]>(FALLBACK_PRICES);
+  const [chartData, setChartData] = useState<ChartPoint[]>(FALLBACK_CHART);
+  const [aiPredictions, setAiPredictions] = useState(FALLBACK_PREDICTIONS);
+  const [recommendations, setRecommendations] = useState(FALLBACK_RECS);
   const [sentiment, setSentiment] = useState<{ status: "BULLISH" | "BEARISH"; confidence: number }>({
     status: "BULLISH", confidence: 74,
   });
-  const [changed, setChanged] = useState<Record<string, "up" | "down" | null>>({});
+  const [changed, setChanged]     = useState<Record<string, "up" | "down" | null>>({});
+  const [dataSource, setDataSource] = useState<"live" | "fallback">("fallback");
   const tickerRef = useRef<HTMLDivElement>(null);
 
-  // Live price update every 3 s
+  // ── Fetch real commodity prices from API ────────────────────────────────
+  useEffect(() => {
+    async function loadPrices() {
+      try {
+        const res = await fetch("/api/market-prices");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+
+        // Replace base prices with real data from Yahoo Finance
+        setPrices(data.prices as CropPrice[]);
+        if (data.chartData?.length > 0) setChartData(data.chartData);
+        if (data.aiPredictions?.length > 0) setAiPredictions(data.aiPredictions);
+        if (data.recommendations?.length > 0) setRecommendations(data.recommendations);
+        if (data.sentiment) setSentiment(data.sentiment);
+        setDataSource("live");
+      } catch (err) {
+        console.warn("[MarketIntelligence] Using fallback data:", err);
+        setDataSource("fallback");
+      }
+    }
+
+    loadPrices();
+    // Refresh real data every 60 s
+    const refreshId = setInterval(loadPrices, 60_000);
+    return () => clearInterval(refreshId);
+  }, []);
+
+  // ── Micro-nudge prices every 3 s for live-ticker feel ──────────────────
   useEffect(() => {
     const id = setInterval(() => {
       setPrices((prev) =>
         prev.map((item) => {
           const newPrice = nudgePrice(item.base);
-          const diff = newPrice - item.price;
+          const diff     = newPrice - item.base;
           const newChange = parseFloat(((diff / item.base) * 100).toFixed(2));
-          return {
-            ...item,
-            price: newPrice,
-            change: newChange,
-            trend: newChange >= 0 ? "up" : "down",
-          };
+          return { ...item, price: newPrice, change: newChange, trend: newChange >= 0 ? "up" : "down" };
         })
       );
-      // flash changed colours
+
       setChanged(
-        INITIAL_PRICES.reduce<Record<string, "up" | "down">>((acc, item) => {
+        FALLBACK_PRICES.reduce<Record<string, "up" | "down">>((acc, item) => {
           acc[item.crop] = Math.random() > 0.5 ? "up" : "down";
           return acc;
         }, {})
       );
       setTimeout(() => setChanged({}), 600);
-
-      // Update sentiment
-      setSentiment({
-        status: Math.random() > 0.35 ? "BULLISH" : "BEARISH",
-        confidence: 60 + Math.floor(Math.random() * 30),
-      });
     }, 3000);
     return () => clearInterval(id);
   }, []);
@@ -168,6 +189,25 @@ export default function MarketIntelligenceSection() {
           highlight="Analytics"
           description="Make data-driven decisions with AI-powered market intelligence covering prices, demand forecasting, and supply chain optimisation across global agricultural markets."
         />
+
+        {/* ── Data source badge ── */}
+        <div className="flex justify-end">
+          <span
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase"
+            style={{
+              fontFamily: "'Orbitron', sans-serif",
+              background: dataSource === "live" ? "rgba(0,255,102,0.08)" : "rgba(255,165,0,0.08)",
+              border: dataSource === "live" ? "1px solid rgba(0,255,102,0.3)" : "1px solid rgba(255,165,0,0.3)",
+              color: dataSource === "live" ? "#00ff66" : "#ffa500",
+            }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full animate-pulse"
+              style={{ background: dataSource === "live" ? "#00ff66" : "#ffa500" }}
+            />
+            {dataSource === "live" ? "Live · Yahoo Finance" : "Cached Data"}
+          </span>
+        </div>
 
         {/* ── ROW 1: Live Price Cards ── */}
         <div>
@@ -273,7 +313,7 @@ export default function MarketIntelligenceSection() {
               </div>
             </div>
             <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={CHART_DATA} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="gWheat" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#00ff66" stopOpacity={0.3} />
@@ -379,7 +419,7 @@ export default function MarketIntelligenceSection() {
             </span>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {AI_PREDICTIONS.map((p, i) => (
+            {aiPredictions.map((p, i) => (
               <motion.div
                 key={p.label}
                 initial={{ opacity: 0, y: 30 }}
@@ -456,7 +496,7 @@ export default function MarketIntelligenceSection() {
             </span>
           </div>
           <div className="grid sm:grid-cols-3 gap-5">
-            {RECOMMENDATIONS.map((rec, i) => (
+            {recommendations.map((rec, i) => (
               <motion.div
                 key={rec.crop}
                 initial={{ opacity: 0, y: 30 }}

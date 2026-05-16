@@ -3,14 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node node_modules/next/dist/bin/next dev",
+    "build": "node node_modules/next/dist/bin/next build",
+    "start": "node node_modules/next/dist/bin/next start",
     "lint": "eslint"
   },
   "dependencies": {
     "@google/genai": "^2.3.0",
-    "@google/generative-ai": "file:.2.1",
     "@gsap/react": "^2.1.2",
     "@supabase/supabase-js": "^2.105.4",
     "framer-motion": "^12.38.0",

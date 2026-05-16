@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Orbitron, Space_Grotesk } from "next/font/google";
+import Navbar from "@/components/Navbar";
 import "./globals.css";
 
 const inter = Inter({
@@ -40,6 +41,14 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
+  themeColor: "#020d04",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -50,7 +59,10 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${orbitron.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col noise-overlay">{children}</body>
+      <body className="min-h-full flex flex-col noise-overlay">
+        <Navbar />
+        {children}
+      </body>
     </html>
   );
 }

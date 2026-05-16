@@ -9,6 +9,12 @@ export default function HeroSection() {
       ?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const scrollToDemo = () => {
+    document
+      .getElementById("market-intelligence")
+      ?.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
     <section className="relative min-h-screen overflow-hidden bg-black text-white flex items-center justify-center bg-gradient-to-b from-black via-green-950 to-black">
 
@@ -110,6 +116,7 @@ export default function HeroSection() {
           </button>
 
           <button
+            onClick={scrollToDemo}
             className="px-8 py-4 border border-green-500 rounded-full hover:bg-green-500/10 transition-all duration-300 hover:scale-105"
           >
             Watch Demo

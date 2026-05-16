@@ -58,6 +58,9 @@ function ScannerUploadArea() {
       const compressedBase64 =
         canvas.toDataURL("image/jpeg", 0.6);
 
+      // Strip "data:image/jpeg;base64," prefix for the API
+      const base64Data = compressedBase64.split(",")[1];
+
       try {
 
         const response = await fetch(
@@ -71,7 +74,8 @@ function ScannerUploadArea() {
             },
 
             body: JSON.stringify({
-              image: compressedBase64,
+              imageBase64: base64Data,
+              mimeType: "image/jpeg",
             }),
           }
         );
@@ -183,6 +187,10 @@ function ScannerUploadArea() {
 
                   <div className="space-y-2 text-sm">
 
+                    {result?.error ? (
+                      <p className="text-red-400">{result.error}</p>
+                    ) : (
+                      <>
                     <p className="text-white">
                       <span className="text-green-400 font-semibold">
                         Disease:
@@ -210,6 +218,12 @@ function ScannerUploadArea() {
                       </span>{" "}
                       {result?.fertilizer || "..."}
                     </p>
+
+                    {result?.additionalInfo && (
+                      <p className="text-zinc-400 text-xs mt-2">{result.additionalInfo}</p>
+                    )}
+                      </>
+                    )}
 
                   </div>
 

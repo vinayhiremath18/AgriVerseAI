@@ -5,6 +5,8 @@ import PestDoctorSection from "@/components/PestDoctorSection";
 import SmartRobotSection from "@/components/SmartRobotSection";
 import CropShopSection from "@/components/CropShopSection";
 import VoiceAISection from "@/components/VoiceAISection";
+import FarmAdvisorSection from "@/components/FarmAdvisorSection";
+import FertilizerCalcSection from "@/components/FertilizerCalcSection";
 
 export default function Home() {
   return (
@@ -20,6 +22,10 @@ export default function Home() {
       <CropShopSection />
 
       <VoiceAISection />
+
+      <FarmAdvisorSection />
+
+      <FertilizerCalcSection />
 
       <DiseaseDetector />
     </main>

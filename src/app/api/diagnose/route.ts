@@ -1,103 +1,85 @@
+import { GoogleGenAI } from "@google/genai";
+
+const PROMPT = `Analyze this crop or plant leaf image and diagnose any disease or health condition.
+
+Respond ONLY with a valid JSON object — no markdown fences, no explanation — in exactly this format:
+{
+  "disease": "disease name, or 'Healthy Crop' if no disease found",
+  "confidence": "e.g. 94%",
+  "treatment": "specific, actionable treatment recommendation",
+  "fertilizer": "recommended fertilizer or soil amendment",
+  "additionalInfo": "one sentence about severity or prevention tip"
+}
+
+If the image is NOT a plant, leaf, or crop, respond with:
+{"disease":"Invalid Image","confidence":"0%","treatment":"Please upload a photo of a plant, leaf, or crop.","fertilizer":"N/A","additionalInfo":""}`;
+
 export async function POST(req: Request) {
-
-    try {
-
-        const body = await req.json();
-
-        const image = body.image;
-
-        if (!image) {
-
-            return Response.json({
-                disease: "No Image",
-                confidence: "0%",
-                treatment: "Upload crop image",
-                fertilizer: "N/A",
-            });
-
-        }
-
-        // SIMPLE FAKE VALIDATION
-
-        const lowerImage = image.toLowerCase();
-
-        // Detect likely non-crop uploads
-        if (
-            lowerImage.includes("person") ||
-            lowerImage.includes("human") ||
-            lowerImage.includes("face")
-        ) {
-
-            return Response.json({
-                disease: "Invalid Image",
-                confidence: "0%",
-                treatment: "Please upload crop or leaf image",
-                fertilizer: "N/A",
-            });
-
-        }
-
-        const cropDiseases = [
-
-            {
-                disease: "Leaf Blight",
-                confidence: "96%",
-                treatment: "Mancozeb Spray",
-                fertilizer: "NPK 19-19-19",
-            },
-
-            {
-                disease: "Powdery Mildew",
-                confidence: "92%",
-                treatment: "Sulfur Fungicide",
-                fertilizer: "DAP",
-            },
-
-            {
-                disease: "Rust Disease",
-                confidence: "95%",
-                treatment: "Copper Oxychloride",
-                fertilizer: "Organic Compost",
-            },
-
-            {
-                disease: "Bacterial Spot",
-                confidence: "91%",
-                treatment: "Streptomycin Spray",
-                fertilizer: "Vermicompost",
-            },
-
-            {
-                disease: "Healthy Crop",
-                confidence: "99%",
-                treatment: "No Treatment Needed",
-                fertilizer: "Maintain Current Nutrition",
-            },
-
-        ];
-
-        const randomDisease =
-            cropDiseases[
-            Math.floor(Math.random() * cropDiseases.length)
-            ];
-
-        await new Promise((resolve) =>
-            setTimeout(resolve, 2500)
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        return Response.json(
+            { error: "AI service not configured (missing GEMINI_API_KEY)" },
+            { status: 503 }
         );
-
-        return Response.json(randomDisease);
-
-    } catch (error) {
-
-        console.log(error);
-
-        return Response.json({
-            disease: "Detection Failed",
-            confidence: "0%",
-            treatment: "Retry Again",
-            fertilizer: "Retry",
-        });
-
     }
 
+    try {
+        const body = await req.json();
+        const { imageBase64, mimeType } = body;
+
+        if (!imageBase64) {
+            return Response.json(
+                { error: "No image data provided" },
+                { status: 400 }
+            );
+        }
+
+        const ai = new GoogleGenAI({ apiKey });
+
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [
+                {
+                    role: "user",
+                    parts: [
+                        {
+                            inlineData: {
+                                mimeType: mimeType || "image/jpeg",
+                                data: imageBase64,
+                            },
+                        },
+                        { text: PROMPT },
+                    ],
+                },
+            ],
+        });
+
+        const raw = response.text?.trim() ?? "";
+
+        // Strip any accidental markdown fences
+        const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+
+        let result;
+        try {
+            result = JSON.parse(jsonStr);
+        } catch {
+            // If Gemini returned prose instead of JSON, wrap it gracefully
+            result = {
+                disease: "Analysis Complete",
+                confidence: "N/A",
+                treatment: raw.slice(0, 200),
+                fertilizer: "Consult local agronomist",
+                additionalInfo: "",
+            };
+        }
+
+        return Response.json(result);
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        console.error("[diagnose]", message);
+        return Response.json(
+            { error: `Diagnosis failed: ${message}` },
+            { status: 500 }
+        );
+    }
 }
