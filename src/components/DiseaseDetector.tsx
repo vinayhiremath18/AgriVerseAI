@@ -1,0 +1,82 @@
+"use client";
+
+import { useState } from "react";
+
+export default function DiseaseDetector() {
+    const [image, setImage] = useState<File | null>(null);
+    const [result, setResult] = useState<any>(null);
+    const [loading, setLoading] = useState(false);
+
+    const handleUpload = async () => {
+        if (!image) return;
+
+        setLoading(true);
+
+        const response = await fetch("/api/diagnose", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                image: image.name,
+            }),
+        });
+
+        const data = await response.json();
+
+        setResult(data);
+        setLoading(false);
+    };
+
+    return (
+        <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-6">
+
+            <h2 className="text-5xl font-bold text-green-400 mb-10">
+                AI Disease Detector
+            </h2>
+
+            <input
+                type="file"
+                onChange={(e) => {
+                    if (e.target.files?.[0]) {
+                        setImage(e.target.files[0]);
+                    }
+                }}
+                className="mb-6"
+            />
+
+            <button
+                onClick={handleUpload}
+                className="px-8 py-4 bg-green-500 rounded-full text-black font-bold hover:bg-green-400 transition-all"
+            >
+                {loading ? "Analyzing..." : "Analyze Crop"}
+            </button>
+
+            {result && (
+                <div className="mt-10 bg-zinc-900 border border-green-500 p-8 rounded-3xl max-w-xl w-full shadow-[0_0_40px_rgba(34,197,94,0.4)]">
+
+                    <h3 className="text-3xl font-bold text-green-400 mb-4">
+                        Diagnosis Result
+                    </h3>
+
+                    <p className="mb-2">
+                        <span className="font-bold">Disease:</span> {result.disease}
+                    </p>
+
+                    <p className="mb-2">
+                        <span className="font-bold">Confidence:</span> {result.confidence}
+                    </p>
+
+                    <p className="mb-2">
+                        <span className="font-bold">Treatment:</span> {result.treatment}
+                    </p>
+
+                    <p>
+                        <span className="font-bold">Fertilizer:</span> {result.fertilizer}
+                    </p>
+
+                </div>
+            )}
+        </div>
+    );
+}
